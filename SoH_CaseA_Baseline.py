@@ -27,8 +27,8 @@ num_layers = settings['num_layers']
 num_neurons = settings['num_neurons']
 
 # 加载Severson电池数据集
-# addr = './SeversonBattery.mat'
-addr='./2017-05-12_batchdata_updated_struct_errorcorrect.mat'
+addr = './SeversonBattery.mat'
+#addr='./2017-05-12_batchdata_updated_struct_errorcorrect.mat'
 data = func.SeversonBattery(addr, seq_len=seq_len)
 
 # 在超参数搜索之前创建一次数据分割

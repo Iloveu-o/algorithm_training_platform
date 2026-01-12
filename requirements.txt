@@ -3,3 +3,7 @@ uvicorn
 pymysql
 numpy
 matplotlib
+scipy
+h5py
+scikit-learn
+openpyxl

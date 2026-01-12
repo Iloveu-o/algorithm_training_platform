@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import service
+import training_api
 
 app = FastAPI(title="Battery Analysis API")
 
@@ -25,6 +26,8 @@ if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 
 app.mount("/results", StaticFiles(directory=results_dir), name="results")
+app.include_router(training_api.router)
+app.include_router(training_api.predict_router)
 
 @app.get("/")
 def read_root():
