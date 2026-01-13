@@ -955,7 +955,11 @@ class DeepHPMNN(nn.Module):
             # 如果输入规格包含多个变量，则使用torch.cat连接
             self.inputs_dynamical = 'torch.cat((' + inputs_dynamical + '), dim=2)'
         # 计算动态模型输入的维度
-        self.inputs_dim_dynamical = eval(inputs_dim_dynamical)
+        if isinstance(inputs_dim_dynamical, str):
+            self.inputs_dim_dynamical = eval(inputs_dim_dynamical)
+        else:
+            self.inputs_dim_dynamical = inputs_dim_dynamical
+
 
         # 创建用于状态预测的代理神经网络
         self.surrogateNN = Neural_Net(

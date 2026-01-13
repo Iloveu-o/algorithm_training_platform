@@ -1,371 +1,307 @@
 # -*- coding: utf-8 -*-
+"""
+本地算法测试脚本
+用于加载训练好的模型 (.pth) 并对指定电池进行 RUL 预测和绘图评估。
+"""
 
-import argparse
-import datetime
 import os
-from dataclasses import dataclass
-from typing import Any, Dict, Tuple, Optional
-
-import matplotlib.pyplot as plt
-import numpy as np
+import sys
 import torch
 import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
+import ast
 
-import sys
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(ROOT)
+# 引入项目根目录以导入 functions
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import functions as func
 
+# ================= 测试配置 =================
+TEST_CONFIG = {
+    # 待测试的电池索引列表 (例如 [15] 代表第16块电池)
+    'test_cells': [32],
+    
+    # 模型文件路径 (请修改为实际路径)
+    'model_path': r'g:\学习\大四课设\电池\algorithm_training_platform\results\DeepHPM_20260113104230.pth',
+    
+    # 数据集路径
+    'data_path': os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'SeversonBattery.mat'),
+    
+    # 绘图采样步长
+    'step': 1,
+    
+    # 运行设备
+    'device': 'cuda' if torch.cuda.is_available() else 'cpu'
+}
+# ===========================================
 
-@dataclass
-class LoadedArtifact:
-    model_type: str
-    config: Dict[str, Any]
-    model_state_dict: Dict[str, Any]
-    scaler_inputs: Optional[Tuple[torch.Tensor, torch.Tensor]]
-    scaler_targets: Optional[Tuple[torch.Tensor, torch.Tensor]]
+# ================= 模型定义与补丁 =================
+# 必须与训练时的模型定义保持一致，包括 Monkey Patch
+
+class PatchedNeuralNet(nn.Module):
+    def __init__(self, seq_len, inputs_dim, outputs_dim, layers, activation='Tanh'):
+        super(PatchedNeuralNet, self).__init__()
+        
+        self.seq_len, self.inputs_dim, self.outputs_dim = seq_len, inputs_dim, outputs_dim
+        self.layers = []
+        
+        # 激活函数选择
+        if activation == 'Sin':
+            act_func = func.Sin()
+        else:
+            act_func = nn.Tanh()
+
+        # 构建层
+        # 输入层
+        self.layers.append(nn.Linear(in_features=inputs_dim, out_features=layers[0]))
+        self.layers.append(act_func)
+        self.layers.append(nn.Dropout(p=0.2))
+
+        # 隐藏层
+        for l in range(len(layers) - 1):
+            self.layers.append(nn.Linear(in_features=layers[l], out_features=layers[l + 1]))
+            self.layers.append(act_func)
+            self.layers.append(nn.Dropout(p=0.2))
+
+        # 输出层
+        if len(layers) > 0:
+            self.layers.append(nn.Linear(in_features=layers[-1], out_features=outputs_dim))
+        else:
+            self.layers.append(nn.Linear(in_features=inputs_dim, out_features=outputs_dim))
+
+        self.NN = nn.Sequential(*self.layers)
+
+    def forward(self, x):
+        # 调整输入形状以适应全连接层
+        x_2D = x.contiguous().view((-1, self.inputs_dim))
+        out_2D = self.NN(x_2D)
+        # 调整回序列形状
+        return out_2D.contiguous().view((-1, self.seq_len, self.outputs_dim))
+
+# 应用补丁替换原始 Neural_Net
+func.Neural_Net = PatchedNeuralNet
 
 
 class BiLSTMModel(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, num_layers: int):
-        super().__init__()
-        self.lstm = nn.LSTM(
-            input_dim,
-            hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=True,
-        )
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
+        super(BiLSTMModel, self).__init__()
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers=num_layers,
+                            batch_first=True, bidirectional=True)
         self.fc = nn.Linear(hidden_dim * 2, output_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x):
         out, _ = self.lstm(x)
         out = self.fc(out[:, -1, :])
         return out.unsqueeze(1)
 
+# ================================================
 
-def _safe_torch_load(path: str) -> Any:
-    try:
-        return torch.load(path, map_location="cpu", weights_only=False)
-    except TypeError:
-        return torch.load(path, map_location="cpu")
+def load_config_safely(checkpoint):
+    """安全解析 checkpoint 中的配置"""
+    # 优先使用字典格式的 train_config，其次尝试解析字符串 config
+    train_cfg = checkpoint.get('train_config') or checkpoint.get('config') or {}
+    
+    if isinstance(train_cfg, str):
+        print("检测到配置为字符串格式，正在解析...")
+        try:
+            # 尝试使用 ast.literal_eval (最安全)
+            train_cfg = ast.literal_eval(train_cfg)
+        except Exception:
+            try:
+                # 回退到 eval，并提供 TrainConfig 的占位解析
+                class TrainConfig:
+                    def __init__(self, **kwargs):
+                        self.__dict__.update(kwargs)
+                context = {'TrainConfig': TrainConfig}
+                obj = eval(train_cfg, context)
+                train_cfg = getattr(obj, '__dict__', {})
+            except Exception as e:
+                print(f"配置解析失败: {e}。将使用默认参数。")
+                train_cfg = {}
+    
+    return train_cfg if isinstance(train_cfg, dict) else {}
 
+def main():
+    cfg = TEST_CONFIG
+    device = torch.device(cfg['device'])
+    
+    # 1. 加载 Checkpoint
+    if not os.path.exists(cfg['model_path']):
+        print(f"错误: 模型文件不存在: {cfg['model_path']}")
+        return
 
-def _resolve_model_path(model_path: str) -> str:
-    model_path = os.path.abspath(model_path)
-    if os.path.isdir(model_path):
-        candidates = []
-        for name in os.listdir(model_path):
-            if name.lower().endswith(".pth"):
-                candidates.append(os.path.join(model_path, name))
-        if not candidates:
-            raise FileNotFoundError(f"no .pth files found in directory: {model_path}")
-        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-        return candidates[0]
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"model file not found: {model_path}")
-    return model_path
+    print(f"正在加载模型: {cfg['model_path']} ...")
+    # weights_only=False 是为了支持加载包含 numpy/config 对象的旧版 checkpoint
+    checkpoint = torch.load(cfg['model_path'], map_location=device, weights_only=False)
+    
+    # 2. 解析训练配置
+    train_cfg = load_config_safely(checkpoint)
+    model_type = train_cfg.get('model_type', 'Baseline')
+    print(f"识别模型类型: {model_type}")
 
-
-def _load_local_training_artifact(model_path: str) -> LoadedArtifact:
-    artifact = _safe_torch_load(model_path)
-    if not isinstance(artifact, dict):
-        raise ValueError("invalid artifact format: expected dict")
-
-    cfg = artifact.get("config")
-    if not isinstance(cfg, dict):
-        raise ValueError("invalid artifact: missing 'config' dict")
-
-    model_type = str(cfg.get("model_type") or "").strip()
-    if model_type not in {"Baseline", "BiLSTM", "DeepHPM"}:
-        raise ValueError(f"invalid model_type in artifact config: {model_type}")
-
-    sd = artifact.get("model_state_dict")
-    if not isinstance(sd, dict):
-        raise ValueError("invalid artifact: missing 'model_state_dict' dict")
-
-    scaler_inputs = artifact.get("scaler_inputs")
-    scaler_targets = artifact.get("scaler_targets")
-    si = None
-    st = None
-    if isinstance(scaler_inputs, tuple) and len(scaler_inputs) == 2:
-        si = (torch.as_tensor(scaler_inputs[0]), torch.as_tensor(scaler_inputs[1]))
-    if isinstance(scaler_targets, tuple) and len(scaler_targets) == 2:
-        st = (torch.as_tensor(scaler_targets[0]), torch.as_tensor(scaler_targets[1]))
-
-    return LoadedArtifact(
-        model_type=model_type,
-        config=cfg,
-        model_state_dict=sd,
-        scaler_inputs=si,
-        scaler_targets=st,
-    )
-
-
-def _apply_neural_net_patch(activation: str) -> None:
-    class PatchedNeuralNet(nn.Module):
-        def __init__(self, seq_len, inputs_dim, outputs_dim, layers, activation="Tanh"):
-            super().__init__()
-
-            act = activation_name
-            if act not in ("Tanh", "Sin"):
-                raise ValueError(f"Unsupported activation: {act}")
-
-            self.seq_len, self.inputs_dim, self.outputs_dim = seq_len, inputs_dim, outputs_dim
-
-            blocks = []
-            blocks.append(nn.Linear(in_features=inputs_dim, out_features=layers[0]))
-            nn.init.xavier_normal_(blocks[-1].weight)
-            if act == "Tanh":
-                blocks.append(nn.Tanh())
-            else:
-                blocks.append(func.Sin())
-            blocks.append(nn.Dropout(p=0.2))
-
-            for i in range(len(layers) - 1):
-                blocks.append(nn.Linear(in_features=layers[i], out_features=layers[i + 1]))
-                nn.init.xavier_normal_(blocks[-1].weight)
-                if act == "Tanh":
-                    blocks.append(nn.Tanh())
-                else:
-                    blocks.append(func.Sin())
-                blocks.append(nn.Dropout(p=0.2))
-
-            blocks.append(nn.Linear(in_features=layers[-1], out_features=outputs_dim))
-            nn.init.xavier_normal_(blocks[-1].weight)
-            self.NN = nn.Sequential(*blocks)
-
-        def forward(self, x):
-            self.x = x
-            self.x.requires_grad_(True)
-            self.x_2D = self.x.contiguous().view((-1, self.inputs_dim))
-            NN_out_2D = self.NN(self.x_2D)
-            self.u_pred = NN_out_2D.contiguous().view((-1, self.seq_len, self.outputs_dim))
-            return self.u_pred
-
-    activation_name = activation
-    func.Neural_Net = PatchedNeuralNet
-
-
-def _build_model_from_local_artifact(la: LoadedArtifact, device: torch.device) -> nn.Module:
-    cfg = la.config
-    activation = str(cfg.get("activation") or "Tanh")
-    _apply_neural_net_patch(activation)
-
-    if la.model_type in {"Baseline", "DeepHPM"}:
-        if la.scaler_inputs is None or la.scaler_targets is None:
-            raise ValueError("artifact missing scalers for Baseline/DeepHPM")
-
-    seq_len = int(cfg.get("seq_len") or 1)
-
-    if la.model_type == "BiLSTM":
-        input_dim = int(cfg.get("inputs_dim") or 0)
-        if input_dim <= 0:
-            raise ValueError("BiLSTM artifact config missing 'inputs_dim' (>0)")
-        hidden_dim = int(cfg.get("lstm_hidden_dim") or 128)
-        num_layers = int(cfg.get("lstm_layers") or 1)
-        model = BiLSTMModel(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=1, num_layers=num_layers)
-        model.load_state_dict(la.model_state_dict, strict=True)
-        model.to(device).eval()
-        return model
-
-    layers = list(cfg.get("hidden_layers") or (int(cfg.get("num_layers") or 1) * [int(cfg.get("num_neurons") or 128)]))
-    if not layers:
-        raise ValueError("invalid hidden_layers: empty")
-
-    mean_in, std_in = la.scaler_inputs
-    mean_tg, std_tg = la.scaler_targets
-    inputs_dim = int(mean_in.numel())
-
-    if la.model_type == "Baseline":
-        model = func.DataDrivenNN(
-            seq_len=seq_len,
-            inputs_dim=inputs_dim,
-            outputs_dim=1,
-            layers=layers,
-            scaler_inputs=(mean_in.to(device), std_in.to(device)),
-            scaler_targets=(mean_tg.to(device), std_tg.to(device)),
+    # 3. 加载数据
+    print(f"正在加载数据集: {cfg['data_path']} ...")
+    seq_len = train_cfg.get('seq_len', 1)
+    data = func.SeversonBattery(cfg['data_path'], seq_len=seq_len)
+    
+    # 4. 遍历测试电池
+    plt.figure(figsize=(14, 10 * len(cfg['test_cells'])))
+    
+    model = None # 确保模型只构建一次
+    
+    for i, cell_id in enumerate(cfg['test_cells']):
+        if not (0 <= cell_id < data.num_cells):
+            print(f"警告: 电池索引 {cell_id} 超出范围 (0-{data.num_cells-1})，跳过。")
+            continue
+            
+        print(f"\n=== 正在处理电池索引: {cell_id} ===")
+        
+        # 获取原始数据 (不经过 train/test 划分)
+        raw_input = data.inputs_units[cell_id]
+        raw_target = data.targets_units[cell_id]
+        
+        # 创建切片 (用于模型输入)
+        inputs_list, targets_list, _ = func.create_slices(
+            data_units=[raw_input],
+            RUL_units=[raw_target],
+            seq_len_slices=seq_len,
+            steps_slices=cfg['step']
         )
-        model.load_state_dict(la.model_state_dict, strict=True)
-        model.to(device).eval()
-        return model
+        
+        # 转换为 Tensor
+        inputs = torch.from_numpy(inputs_list[0]).type(torch.float32).to(device)
+        targets = torch.from_numpy(targets_list[0]).type(torch.float32).to(device)
+        # 仅使用 PCL 目标通道 (第 0 通道)，与模型输出维度对齐
+        targets = targets[:, :, 0:1]
+        
+        # 确保输入维度正确 (batch, seq_len, input_dim)
+        if inputs.dim() == 2:
+            inputs = inputs.unsqueeze(0)
+            
+        inputs_dim = inputs.shape[2]
+        outputs_dim = 1
+        
+        # 5. 构建模型 (如果尚未构建)
+        if model is None:
+            print("正在构建并加载模型权重...")
+            scaler_inputs = checkpoint.get('scaler_inputs')
+            scaler_targets = checkpoint.get('scaler_targets')
+            
+            # 提取网络参数
+            num_neurons = train_cfg.get('num_neurons', 128)
+            num_layers = train_cfg.get('num_layers', 1)
+            layers_cfg = train_cfg.get('layers')
+            hidden_layers = layers_cfg if layers_cfg else train_cfg.get('hidden_layers')
+            if not hidden_layers:
+                hidden_layers = [num_neurons] * num_layers
+            
+            if model_type == 'Baseline':
+                model = func.DataDrivenNN(
+                    seq_len=seq_len,
+                    inputs_dim=inputs_dim,
+                    outputs_dim=outputs_dim,
+                    layers=hidden_layers,
+                    scaler_inputs=scaler_inputs,
+                    scaler_targets=scaler_targets
+                ).to(device)
+                
+            elif model_type == 'DeepHPM':
+                # 处理 DeepHPM 特有参数
+                inputs_dynamical = train_cfg.get('inputs_dynamical', 'torch.cat((t, s), dim=2)')
+                inputs_dim_dynamical = train_cfg.get('inputs_dim_dynamical', 2)
+                
+                model = func.DeepHPMNN(
+                    seq_len=seq_len,
+                    inputs_dim=inputs_dim,
+                    outputs_dim=outputs_dim,
+                    layers=hidden_layers,
+                    scaler_inputs=scaler_inputs,
+                    scaler_targets=scaler_targets,
+                    inputs_dynamical=inputs_dynamical,
+                    inputs_dim_dynamical=inputs_dim_dynamical
+                ).to(device)
+                
+            elif model_type == 'BiLSTM':
+                lstm_hidden = train_cfg.get('lstm_hidden_dim', train_cfg.get('hidden_dim', 128))
+                lstm_layers = train_cfg.get('lstm_layers', train_cfg.get('num_layers', 1))
+                
+                model = BiLSTMModel(
+                    input_dim=inputs_dim,
+                    hidden_dim=lstm_hidden,
+                    output_dim=outputs_dim,
+                    num_layers=lstm_layers
+                ).to(device)
+            
+            # 加载权重
+            sd = checkpoint['model_state_dict']
+            if any(k.startswith('model.') for k in sd.keys()):
+                sd = {k.replace('model.', ''): v for k, v in sd.items()}
+            model.load_state_dict(sd, strict=False)
+            model.eval()
+            print("模型加载完成。")
 
-    inputs_dynamical = str(cfg.get("inputs_dynamical") or "U")
-    inputs_dim_dynamical = int(cfg.get("inputs_dim_dynamical") or 1)
-    model = func.DeepHPMNN(
-        seq_len=seq_len,
-        inputs_dim=inputs_dim,
-        outputs_dim=1,
-        layers=layers,
-        scaler_inputs=(mean_in.to(device), std_in.to(device)),
-        scaler_targets=(mean_tg.to(device), std_tg.to(device)),
-        inputs_dynamical=inputs_dynamical,
-        inputs_dim_dynamical=str(inputs_dim_dynamical),
-    )
-    model.load_state_dict(la.model_state_dict, strict=True)
-    model.to(device).eval()
-    return model
-
-
-def _extract_cell_series(data: func.SeversonBattery, cell_id: int) -> Tuple[torch.Tensor, torch.Tensor]:
-    idx_true = int(cell_id) - 1
-    inputs_tmp = None
-    targets_tmp = None
-    if idx_true in data.idx_train_units:
-        idx_tmp = int((data.idx_train_units == idx_true).nonzero()[0][0])
-        inputs_tmp = data.inputs_train_slices[idx_tmp]
-        targets_tmp = data.targets_train_slices[idx_tmp]
-    elif idx_true in data.idx_val_units:
-        idx_tmp = int((data.idx_val_units == idx_true).nonzero()[0][0])
-        inputs_tmp = data.inputs_val_slices[idx_tmp]
-        targets_tmp = data.targets_val_slices[idx_tmp]
-    elif idx_true in data.idx_test_units:
-        idx_tmp = int((data.idx_test_units == idx_true).nonzero()[0][0])
-        inputs_tmp = data.inputs_test_slices[idx_tmp]
-        targets_tmp = data.targets_test_slices[idx_tmp]
-    if inputs_tmp is None or targets_tmp is None:
-        raise ValueError(f"cell_id not found in dataset: {cell_id}")
-    inputs_t = torch.from_numpy(inputs_tmp).type(torch.float32)
-    targets_t = torch.from_numpy(targets_tmp).type(torch.float32)
-    return inputs_t, targets_t
-
-
-def _compute_rul_curve(cycles: torch.Tensor, soh: torch.Tensor, threshold_soh: float) -> torch.Tensor:
-    cyc = cycles.detach().view(-1)
-    s = soh.detach().view(-1)
-    if cyc.numel() == 0:
-        return torch.zeros_like(cyc)
-    crossed = (s <= float(threshold_soh)).nonzero()
-    if crossed.numel() > 0:
-        eol_cycle = cyc[int(crossed[0].item())]
-    else:
-        eol_cycle = cyc[-1]
-    rul = eol_cycle - cyc
-    return torch.clamp(rul, min=0.0)
-
-
-def _eval_metrics(pred: torch.Tensor, true: torch.Tensor) -> Dict[str, float]:
-    p = pred.detach().view(-1).float()
-    t = true.detach().view(-1).float()
-    mae = torch.mean(torch.abs(p - t)).item()
-    mse = torch.mean((p - t) ** 2).item()
-    rmspe = torch.sqrt(torch.mean(((p - t) / torch.clamp(t, min=1e-8)) ** 2)).item()
-    ss_res = torch.sum((t - p) ** 2)
-    ss_tot = torch.sum((t - torch.mean(t)) ** 2)
-    r2 = (1 - ss_res / torch.clamp(ss_tot, min=1e-12)).item()
-    return {"MAE": float(mae), "MSE": float(mse), "RMSPE": float(rmspe), "R2": float(r2)}
-
-
-def _plot_and_save(out_path: str, cycles: np.ndarray, true: np.ndarray, pred: np.ndarray, title: str, y_label: str) -> None:
-    plt.figure(figsize=(5.0, 3.2))
-    plt.plot(cycles, true, label="True")
-    plt.plot(cycles, pred, label="Pred", linestyle="--")
-    plt.xlabel("Cycle")
-    plt.ylabel(y_label)
-    plt.title(title)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=200)
-    plt.close()
-
-
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, default=os.path.join(os.path.dirname(__file__), "local_results"))
-    parser.add_argument("--data_path", type=str, default=os.path.join(ROOT, "SeversonBattery.mat"))
-    parser.add_argument("--cell_id", type=int, required=True)
-    parser.add_argument("--step", type=int, default=1)
-    parser.add_argument("--threshold_soh", type=float, default=0.8)
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--out_dir", type=str, default=os.path.join(os.path.dirname(__file__), "local_test_outputs"))
-    args = parser.parse_args(argv)
-
-    model_path = _resolve_model_path(args.model_path)
-    la = _load_local_training_artifact(model_path)
-
-    dev = torch.device(args.device)
-    data = func.SeversonBattery(args.data_path, seq_len=int(la.config.get("seq_len") or 1))
-    inputs_t, targets_t = _extract_cell_series(data, int(args.cell_id))
-
-    os.makedirs(args.out_dir, exist_ok=True)
-    run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = f"{la.model_type}_cell{int(args.cell_id)}_{run_id}"
-
-    model = _build_model_from_local_artifact(la, dev)
-    inputs_dev = inputs_t.to(dev)
-    targets_dev = targets_t.to(dev)
-
-    with torch.no_grad():
-        if la.model_type == "BiLSTM":
-            pcl_pred = model(inputs_dev).detach().cpu().view(-1)
+        # 6. 推理预测
+        if model_type == 'BiLSTM':
+            with torch.no_grad():
+                U_pred = model(inputs)
         else:
-            pcl_pred, _, _ = model(inputs=inputs_dev)
-            pcl_pred = pcl_pred.detach().cpu().view(-1)
+            # Baseline / DeepHPM 需要 autograd 计算 U_t，不能禁用梯度
+            U_pred, _, _ = model(inputs)
+        
+        # 7. 数据后处理为 PCL 与 RUL
+        U_pred_np = U_pred.detach().cpu().numpy().flatten()
+        targets_np = targets.cpu().numpy().flatten()
+        
+        pcl_pred = U_pred_np
+        pcl_true = targets_np
+        
+        # 8. 计算 EOL 与 RUL（以 PCL 阈值定义）
+        pcl_threshold = 0.2
+        
+        def calculate_eol_idx_pcl(pcl_series, thresh):
+            indices = np.where(pcl_series > thresh)[0]
+            if len(indices) > 0:
+                return indices[0]
+            return len(pcl_series)
+        
+        true_eol = calculate_eol_idx_pcl(pcl_true, pcl_threshold)
+        pred_eol = calculate_eol_idx_pcl(pcl_pred, pcl_threshold)
+        error = pred_eol - true_eol
+        
+        print(f"预测结果: 真实EOL={true_eol}, 预测EOL={pred_eol}, 误差={error} cycles")
+        
+        # 9. 绘制 PCL 与 RUL 曲线（每个电池两个子图）
+        cycles = np.arange(len(pcl_true)) + 1
+        rows = len(cfg['test_cells']) * 2
+        base = i * 2
+        
+        ax1 = plt.subplot(rows, 1, base + 1)
+        ax1.plot(cycles, pcl_true, 'k-', label='Actual PCL', linewidth=1.5)
+        ax1.plot(cycles, pcl_pred, 'r--', label='Predicted PCL', linewidth=1.5)
+        ax1.axhline(y=pcl_threshold, color='g', linestyle=':', label='EOL PCL Threshold (0.2)')
+        ax1.text(0.02, 0.05, f"EOL Error: {error} cycles\n(True: {true_eol}, Pred: {pred_eol})",
+                 transform=ax1.transAxes, bbox=dict(facecolor='white', alpha=0.8))
+        ax1.set_title(f'Battery Cell {cell_id} - PCL Prediction ({model_type})')
+        ax1.set_ylabel('PCL')
+        ax1.legend(loc='upper right')
+        ax1.grid(True, linestyle='--', alpha=0.6)
+        
+        eol_true_cycle = true_eol + 1
+        eol_pred_cycle = pred_eol + 1
+        rul_true = np.maximum(eol_true_cycle - cycles, 0)
+        rul_pred = np.maximum(eol_pred_cycle - cycles, 0)
+        
+        ax2 = plt.subplot(rows, 1, base + 2)
+        ax2.plot(cycles, rul_true, 'k-', label='Actual RUL', linewidth=1.5)
+        ax2.plot(cycles, rul_pred, 'r--', label='Predicted RUL', linewidth=1.5)
+        ax2.set_title(f'Battery Cell {cell_id} - RUL Prediction ({model_type})')
+        ax2.set_ylabel('RUL (cycles)')
+        ax2.set_xlabel('Cycle')
+        ax2.legend(loc='upper right')
+        ax2.grid(True, linestyle='--', alpha=0.6)
 
-    cycles = inputs_t[:, :, -1].detach().cpu().view(-1)
-    pcl_true = targets_t[:, :, 0].detach().cpu().view(-1)
-    soh_pred = 1.0 - pcl_pred
-    soh_true = 1.0 - pcl_true
+    plt.tight_layout()
+    plt.show()
 
-    rul_true = None
-    if targets_t.shape[-1] >= 2:
-        rul_true = targets_t[:, :, 1].detach().cpu().view(-1)
-    rul_pred = _compute_rul_curve(cycles, soh_pred, float(args.threshold_soh))
-
-    step = max(1, int(args.step))
-    idx = slice(None, None, step)
-
-    metrics_pcl = _eval_metrics(pcl_pred, pcl_true)
-    metrics_soh = _eval_metrics(soh_pred, soh_true)
-    metrics_rul = _eval_metrics(rul_pred, rul_true) if rul_true is not None else None
-
-    out_pcl = os.path.join(args.out_dir, f"{base}_pcl.png")
-    out_soh = os.path.join(args.out_dir, f"{base}_soh.png")
-    out_rul = os.path.join(args.out_dir, f"{base}_rul.png")
-
-    cyc_np = cycles[idx].numpy()
-    _plot_and_save(out_pcl, cyc_np, pcl_true[idx].numpy(), pcl_pred[idx].numpy(), f"PCL Curve ({la.model_type})", "PCL")
-    _plot_and_save(out_soh, cyc_np, soh_true[idx].numpy(), soh_pred[idx].numpy(), f"SOH Curve ({la.model_type})", "SOH")
-    if rul_true is not None:
-        _plot_and_save(out_rul, cyc_np, rul_true[idx].numpy(), rul_pred[idx].numpy(), f"RUL Curve ({la.model_type})", "RUL")
-
-    report = {
-        "model_path": model_path,
-        "model_type": la.model_type,
-        "cell_id": int(args.cell_id),
-        "step": step,
-        "threshold_soh": float(args.threshold_soh),
-        "metrics_pcl": metrics_pcl,
-        "metrics_soh": metrics_soh,
-        "metrics_rul": metrics_rul,
-        "plots": {
-            "pcl": out_pcl,
-            "soh": out_soh,
-            "rul": out_rul if rul_true is not None else None,
-        },
-    }
-
-    txt_path = os.path.join(args.out_dir, f"{base}_report.txt")
-    with open(txt_path, "w", encoding="utf-8") as f:
-        for k, v in report.items():
-            f.write(f"{k}: {v}\n")
-
-    print(f"model_path: {model_path}")
-    print(f"model_type: {la.model_type}")
-    print(f"cell_id: {int(args.cell_id)}  step: {step}  threshold_soh: {float(args.threshold_soh)}")
-    print(f"metrics_pcl: {metrics_pcl}")
-    print(f"metrics_soh: {metrics_soh}")
-    if metrics_rul is not None:
-        print(f"metrics_rul: {metrics_rul}")
-    print(f"saved: {out_pcl}")
-    print(f"saved: {out_soh}")
-    if rul_true is not None:
-        print(f"saved: {out_rul}")
-    print(f"saved: {txt_path}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-
+if __name__ == '__main__':
+    main()

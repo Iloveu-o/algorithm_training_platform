@@ -189,10 +189,7 @@ class TrainConfig:
 
 def _load_settings(path: str) -> dict:
     if os.path.exists(path):
-        try:
-            return torch.load(path, weights_only=False)
-        except TypeError:
-            return torch.load(path)
+        return torch.load(path)
     return {}
 
 
@@ -200,16 +197,6 @@ def _ensure_results_dir(save_path: str) -> None:
     out_dir = os.path.dirname(os.path.abspath(save_path))
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
-
-
-def _state_dict_to_cpu(state_dict: dict) -> dict:
-    out = {}
-    for k, v in state_dict.items():
-        if torch.is_tensor(v):
-            out[k] = v.detach().cpu()
-        else:
-            out[k] = v
-    return out
 
 
 def train_bilstm(cfg: TrainConfig) -> dict[str, dict[str, float]]:
@@ -322,12 +309,6 @@ def train_bilstm(cfg: TrainConfig) -> dict[str, dict[str, float]]:
         "metric": report,
         "history": history,
         "config": str(cfg),
-        "artifact_version": 2,
-        "model_type": "BiLSTM",
-        "train_config": cfg.__dict__,
-        "model_state_dict": _state_dict_to_cpu(model.state_dict()),
-        "scaler_inputs": {"mean": mean_inputs_train.detach().cpu(), "std": std_inputs_train.detach().cpu()},
-        "scaler_targets": {"mean": mean_targets_train.detach().cpu(), "std": std_targets_train.detach().cpu()},
     }
     torch.save(results, cfg.save_path)
 

@@ -39,12 +39,12 @@ USER_CONFIG = {
     "settings_path": os.path.join(ROOT, "Settings", "settings_SoH_CaseA.pth"), # 默认设置文件路径
 
     # 2. 数据集划分
-    "train_cells": "91-99,101-124",  # 训练集电池编号 (DeepHPM建议更多数据，如 "91,124")
-    "test_cells": "100",      # 测试集电池编号
+    "train_cells": "91-100",  # 训练集电池编号 (DeepHPM建议更多数据，如 "91,124")
+    "test_cells": "124",      # 测试集电池编号
     "perc_val": 0.2,          # 验证集比例
 
     # 3. 通用网络结构参数 (Baseline & DeepHPM)
-    "layers": "32,32",        # 隐藏层结构 (用于 Baseline 和 DeepHPM)
+    "layers": "32,8",        # 隐藏层结构 (用于 Baseline 和 DeepHPM)
     "activation": "Tanh",     # 激活函数 (用于 Baseline): "Tanh", "ReLU", "Sigmoid", "LeakyReLU", "Sin"
     
     # 4. BiLSTM 专属结构参数
@@ -58,7 +58,7 @@ USER_CONFIG = {
 
     # 6. 训练超参数
     "epochs": 100,            # 训练轮数
-    "batch_size": 128,        # 批大小
+    "batch_size": 32,        # 批大小
     "lr": 1e-4,               # 初始学习率
     "weight_decay": 0.0,      # 权重衰减
     "step_size": 200,          # 学习率衰减步长
@@ -272,16 +272,6 @@ def _ensure_results_dir(save_path: str) -> None:
         os.makedirs(out_dir, exist_ok=True)
 
 
-def _state_dict_to_cpu(state_dict: Dict[str, Any]) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
-    for k, v in state_dict.items():
-        if torch.is_tensor(v):
-            out[k] = v.detach().cpu()
-        else:
-            out[k] = v
-    return out
-
-
 def _write_readable_log(save_path: str, cfg: "TrainConfig", metrics: dict, started_at: datetime.datetime, finished_at: datetime.datetime) -> str:
     base, _ = os.path.splitext(save_path)
     txt_path = f"{base}.txt" if base else f"{save_path}.txt"
@@ -322,8 +312,7 @@ def _train_epochwise(
     *,
     cfg: TrainConfig,
     model: nn.Module,
-    inputs_train: torch.Tensor,
-    targets_train: torch.Tensor,
+    train_loader: DataLoader,
     inputs_val: torch.Tensor,
     targets_val: torch.Tensor,
     optimizer: optim.Optimizer,
@@ -354,136 +343,129 @@ def _train_epochwise(
         "r2_val": [],
     }
 
-    # Use cudnn for better performance, especially for BiLSTM
-    # torch.backends.cudnn.flags(enabled=False) 
-
-    num_samples = inputs_train.shape[0]
-    
-    for epoch_idx in range(int(cfg.epochs)):
-        if should_cancel is not None and should_cancel():
-            raise TrainingCancelled()
-        model.train()
-        loss_sum = 0.0
-        loss_u_sum = 0.0
-        loss_f_sum = 0.0
-        loss_f_t_sum = 0.0
-        seen = 0
-
-        # Manual batching for performance (avoid DataLoader overhead on GPU tensors)
-        indices = torch.randperm(num_samples, device=device)
-        
-        for start_idx in range(0, num_samples, cfg.batch_size):
+    # Use cudnn for better performance
+    # torch.backends.cudnn.benchmark = True # Optional: might help if input sizes are constant
+    with torch.backends.cudnn.flags(enabled=True):
+        for epoch_idx in range(int(cfg.epochs)):
             if should_cancel is not None and should_cancel():
                 raise TrainingCancelled()
-                
-            idx = indices[start_idx : start_idx + cfg.batch_size]
-            inputs_train_batch = inputs_train[idx]
-            targets_train_batch = targets_train[idx]
+            model.train()
+            loss_sum = 0.0
+            loss_u_sum = 0.0
+            loss_f_sum = 0.0
+            loss_f_t_sum = 0.0
+            seen = 0
 
-            U_pred_train, F_pred_train, F_t_pred_train = model(inputs_train_batch)
-            loss_raw = criterion(
-                outputs_U=U_pred_train,
-                targets_U=targets_train_batch,
-                outputs_F=F_pred_train,
-                outputs_F_t=F_t_pred_train,
+            for period_idx, (inputs_train_batch, targets_train_batch) in enumerate(train_loader):
+                if should_cancel is not None and should_cancel():
+                    raise TrainingCancelled()
+                inputs_train_batch = inputs_train_batch.to(device)
+                targets_train_batch = targets_train_batch.to(device)
+
+                U_pred_train, F_pred_train, F_t_pred_train = model(inputs=inputs_train_batch)
+                loss_raw = criterion(
+                    outputs_U=U_pred_train,
+                    targets_U=targets_train_batch,
+                    outputs_F=F_pred_train,
+                    outputs_F_t=F_t_pred_train,
+                    log_sigma_u=log_sigma_u,
+                    log_sigma_f=log_sigma_f,
+                    log_sigma_f_t=log_sigma_f_t,
+                )
+                denom = max(1, int(targets_train_batch.numel()))
+                loss = loss_raw / denom
+                loss_u = criterion.loss_U / denom
+                loss_f = criterion.loss_F / denom
+                loss_f_t = criterion.loss_F_t / denom
+
+                if not torch.isfinite(loss):
+                    raise FloatingPointError(
+                        f"Non-finite loss at epoch={epoch_idx + 1} period={period_idx + 1}: "
+                        f"loss={float(loss.detach().item())}"
+                    )
+
+                optimizer.zero_grad()
+                loss.backward()
+                if cfg.model_type == "DeepHPM":
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+
+                loss_sum += float(loss.detach().item())
+                loss_u_sum += float(loss_u.detach().item())
+                loss_f_sum += float(loss_f.detach().item())
+                loss_f_t_sum += float(loss_f_t.detach().item())
+                seen += 1
+
+            scheduler.step()
+
+            if should_cancel is not None and should_cancel():
+                raise TrainingCancelled()
+            model.eval()
+            U_pred_val, F_pred_val, F_t_pred_val = model(inputs=inputs_val)
+            loss_val_raw = criterion(
+                outputs_U=U_pred_val,
+                targets_U=targets_val,
+                outputs_F=F_pred_val,
+                outputs_F_t=F_t_pred_val,
                 log_sigma_u=log_sigma_u,
                 log_sigma_f=log_sigma_f,
                 log_sigma_f_t=log_sigma_f_t,
             )
-            denom = max(1, int(targets_train_batch.numel()))
-            loss = loss_raw / denom
-            loss_u = criterion.loss_U / denom
-            loss_f = criterion.loss_F / denom
-            loss_f_t = criterion.loss_F_t / denom
+            denom_val = max(1, int(targets_val.numel()))
+            loss_val = loss_val_raw / denom_val
+            loss_u_val = criterion.loss_U / denom_val
+            loss_f_val = criterion.loss_F / denom_val
+            loss_f_t_val = criterion.loss_F_t / denom_val
 
-            if not torch.isfinite(loss):
-                raise FloatingPointError(
-                    f"Non-finite loss at epoch={epoch_idx + 1}: "
-                    f"loss={float(loss.detach().item())}"
-                )
+            if not torch.isfinite(loss_val):
+                raise FloatingPointError(f"Non-finite val loss at epoch={epoch_idx + 1}: loss_val={float(loss_val.detach().item())}")
 
-            optimizer.zero_grad()
-            loss.backward()
-            if cfg.model_type == "DeepHPM":
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            U_pred_val_soh = 1.0 - U_pred_val
+            targets_val_soh = 1.0 - targets_val
+            m = _eval_metrics(U_pred_val_soh, targets_val_soh)
 
-            loss_sum += float(loss.detach().item())
-            loss_u_sum += float(loss_u.detach().item())
-            loss_f_sum += float(loss_f.detach().item())
-            loss_f_t_sum += float(loss_f_t.detach().item())
-            seen += 1
+            avg_loss = loss_sum / max(1, seen)
+            avg_loss_u = loss_u_sum / max(1, seen)
+            avg_loss_f = loss_f_sum / max(1, seen)
+            avg_loss_f_t = loss_f_t_sum / max(1, seen)
 
-        scheduler.step()
+            history["epoch"].append(epoch_idx + 1)
+            history["lr"].append(float(optimizer.param_groups[0].get("lr", 0.0)))
+            history["loss_train"].append(avg_loss)
+            history["loss_u_train"].append(avg_loss_u)
+            history["loss_f_train"].append(avg_loss_f)
+            history["loss_f_t_train"].append(avg_loss_f_t)
+            history["loss_val"].append(float(loss_val.detach().item()))
+            history["loss_u_val"].append(float(loss_u_val.detach().item()))
+            history["loss_f_val"].append(float(loss_f_val.detach().item()))
+            history["loss_f_t_val"].append(float(loss_f_t_val.detach().item()))
+            history["mae_val"].append(float(m["MAE"]))
+            history["mse_val"].append(float(m["MSE"]))
+            history["rmspe_val"].append(float(m["RMSPE"]))
+            history["r2_val"].append(float(m["R2"]))
 
-        if should_cancel is not None and should_cancel():
-            raise TrainingCancelled()
-        model.eval()
-        U_pred_val, F_pred_val, F_t_pred_val = model(inputs_val)
-        loss_val_raw = criterion(
-            outputs_U=U_pred_val,
-            targets_U=targets_val,
-            outputs_F=F_pred_val,
-            outputs_F_t=F_t_pred_val,
-            log_sigma_u=log_sigma_u,
-            log_sigma_f=log_sigma_f,
-            log_sigma_f_t=log_sigma_f_t,
-        )
-        denom_val = max(1, int(targets_val.numel()))
-        loss_val = loss_val_raw / denom_val
-        loss_u_val = criterion.loss_U / denom_val
-        loss_f_val = criterion.loss_F / denom_val
-        loss_f_t_val = criterion.loss_F_t / denom_val
+            payload: Dict[str, Any] = {
+                "epoch": epoch_idx + 1,
+                "epochs": int(cfg.epochs),
+                "lr": history["lr"][-1],
+                "loss_train": avg_loss,
+                "loss_u_train": avg_loss_u,
+                "loss_f_train": avg_loss_f,
+                "loss_f_t_train": avg_loss_f_t,
+                "loss_val": history["loss_val"][-1],
+                "loss_u_val": history["loss_u_val"][-1],
+                "loss_f_val": history["loss_f_val"][-1],
+                "loss_f_t_val": history["loss_f_t_val"][-1],
+                "metrics_val": m,
+            }
+            if on_epoch_end is not None:
+                on_epoch_end(payload)
 
-        if not torch.isfinite(loss_val):
-            raise FloatingPointError(f"Non-finite val loss at epoch={epoch_idx + 1}: loss_val={float(loss_val.detach().item())}")
-
-        U_pred_val_soh = 1.0 - U_pred_val
-        targets_val_soh = 1.0 - targets_val
-        m = _eval_metrics(U_pred_val_soh, targets_val_soh)
-
-        avg_loss = loss_sum / max(1, seen)
-        avg_loss_u = loss_u_sum / max(1, seen)
-        avg_loss_f = loss_f_sum / max(1, seen)
-        avg_loss_f_t = loss_f_t_sum / max(1, seen)
-
-        history["epoch"].append(epoch_idx + 1)
-        history["lr"].append(float(optimizer.param_groups[0].get("lr", 0.0)))
-        history["loss_train"].append(avg_loss)
-        history["loss_u_train"].append(avg_loss_u)
-        history["loss_f_train"].append(avg_loss_f)
-        history["loss_f_t_train"].append(avg_loss_f_t)
-        history["loss_val"].append(float(loss_val.detach().item()))
-        history["loss_u_val"].append(float(loss_u_val.detach().item()))
-        history["loss_f_val"].append(float(loss_f_val.detach().item()))
-        history["loss_f_t_val"].append(float(loss_f_t_val.detach().item()))
-        history["mae_val"].append(float(m["MAE"]))
-        history["mse_val"].append(float(m["MSE"]))
-        history["rmspe_val"].append(float(m["RMSPE"]))
-        history["r2_val"].append(float(m["R2"]))
-
-        payload: Dict[str, Any] = {
-            "epoch": epoch_idx + 1,
-            "epochs": int(cfg.epochs),
-            "lr": history["lr"][-1],
-            "loss_train": avg_loss,
-            "loss_u_train": avg_loss_u,
-            "loss_f_train": avg_loss_f,
-            "loss_f_t_train": avg_loss_f_t,
-            "loss_val": history["loss_val"][-1],
-            "loss_u_val": history["loss_u_val"][-1],
-            "loss_f_val": history["loss_f_val"][-1],
-            "loss_f_t_val": history["loss_f_t_val"][-1],
-            "metrics_val": m,
-        }
-        if on_epoch_end is not None:
-            on_epoch_end(payload)
-
-        print(
-            f"Epoch: {epoch_idx + 1}, "
-            f"Loss: {avg_loss:.6f}, Loss_U: {avg_loss_u:.6f}, Loss_F: {avg_loss_f:.6f}, Loss_F_t: {avg_loss_f_t:.6f}, "
-            f"MAE: {m['MAE']:.6f}, MSE: {m['MSE']:.6f}, RMSPE: {m['RMSPE']:.6f}, R2: {m['R2']:.6f}"
-        )
+            print(
+                f"Epoch: {epoch_idx + 1}, "
+                f"Loss: {avg_loss:.6f}, Loss_U: {avg_loss_u:.6f}, Loss_F: {avg_loss_f:.6f}, Loss_F_t: {avg_loss_f_t:.6f}, "
+                f"MAE: {m['MAE']:.6f}, MSE: {m['MSE']:.6f}, RMSPE: {m['RMSPE']:.6f}, R2: {m['R2']:.6f}"
+            )
 
     return model, history
 
@@ -603,15 +585,23 @@ def train_unified(
     log_sigma_f = torch.zeros((), device=dev)
     log_sigma_f_t = torch.zeros((), device=dev)
 
-    # 4. Training Loop
-    # Use cuDNN for performance
-    # torch.backends.cudnn.enabled = False 
+    # 4. Data Loader
+    train_set = TensorDataset(inputs_train, targets_train)
+    train_loader = DataLoader(
+        train_set, 
+        batch_size=cfg.batch_size, 
+        shuffle=True, 
+        drop_last=True
+    )
+
+    # 5. Training Loop
+    # Disable cuDNN for reproducibility if needed (as per original code)
+    torch.backends.cudnn.enabled = False
     try:
         model, results_epoch = _train_epochwise(
             cfg=cfg,
             model=model,
-            inputs_train=inputs_train,
-            targets_train=targets_train,
+            train_loader=train_loader,
             inputs_val=inputs_val,
             targets_val=targets_val,
             optimizer=optimizer,
@@ -629,15 +619,7 @@ def train_unified(
     
     # Unpack model if wrapped (for BiLSTM we use the wrapper's output directly, 
     # but for saving/predicting we just call the model as is)
-    
-    # BiLSTM 需要输入标准化数据，并输出标准化结果，需手动反标准化
-    if cfg.model_type == "BiLSTM":
-        inputs_test_norm, _, _ = func.standardize_tensor(inputs_test, mode='transform', mean=mean_inputs_train, std=std_inputs_train)
-        U_pred_test_norm, _, _ = model(inputs_test_norm)
-        U_pred_test = func.inverse_standardize_tensor(U_pred_test_norm, mean=mean_targets_train, std=std_targets_train)
-    else:
-        # 其他模型内部处理了标准化
-        U_pred_test, _, _ = model(inputs_test)
+    U_pred_test, _, _ = model(inputs=inputs_test)
     
     # Convert PCL to SoH (1 - PCL)
     U_pred_test_soh = 1.0 - U_pred_test
@@ -651,19 +633,21 @@ def train_unified(
     # 7. Save Results
     _ensure_results_dir(cfg.save_path)
     results = {
+        "model_state_dict": model.state_dict(),  # 保存模型权重
         "U_true": targets_test_soh.detach().cpu().numpy().squeeze(),
         "U_pred": U_pred_test_soh.detach().cpu().numpy().squeeze(),
         "Cycles": inputs_test[:, :, -1:].detach().cpu().numpy().squeeze(),
         "metric": metrics,
         "config": str(cfg),
-        "history": results_epoch,
-        "artifact_version": 2,
-        "model_type": cfg.model_type,
-        "train_config": cfg.__dict__,
-        "model_state_dict": _state_dict_to_cpu(model.state_dict()),
-        "scaler_inputs": {"mean": mean_inputs_train.detach().cpu(), "std": std_inputs_train.detach().cpu()},
-        "scaler_targets": {"mean": mean_targets_train.detach().cpu(), "std": std_targets_train.detach().cpu()},
+        "train_config": cfg.__dict__, # 保存完整配置字典，方便后续解析
+        "history": results_epoch
     }
+    
+    # 保存 Scaler 信息 (如果存在)
+    if 'mean_inputs_train' in locals():
+        results['scaler_inputs'] = (mean_inputs_train, std_inputs_train)
+        results['scaler_targets'] = (mean_targets_train, std_targets_train)
+
     torch.save(results, cfg.save_path)
     print(f"Results saved to: {cfg.save_path}")
     txt_path = _write_readable_log(cfg.save_path, cfg, metrics, started_at=started_at, finished_at=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))))
