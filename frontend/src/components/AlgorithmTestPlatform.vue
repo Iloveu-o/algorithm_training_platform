@@ -1,100 +1,100 @@
 <template>
   <div class="test-platform">
-    <el-row :gutter="20">
-      <el-col :span="10">
-        <el-card header="算法测试平台" class="mb-4">
-          <el-form :model="form" label-width="110px">
-            <el-form-item label="模型文件">
-              <el-select v-model="form.model_name" placeholder="请选择模型" style="width: 100%">
-                <el-option v-for="m in models" :key="m" :label="m" :value="m" />
-              </el-select>
-            </el-form-item>
+    <div class="sidebar-container">
+      <el-card class="sidebar-card" :body-style="{ padding: '15px', maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' }">
+        <el-form :model="form" label-width="110px">
+          <el-form-item label="模型文件">
+            <el-select v-model="form.model_name" placeholder="请选择模型" style="width: 100%">
+              <el-option v-for="m in models" :key="m" :label="m" :value="m" />
+            </el-select>
+          </el-form-item>
 
-            <el-form-item label="电池组编号">
-              <el-input-number
-                v-model="form.cell_id"
-                :min="0"
-                :max="123"
-                :precision="0"
-                :step="1"
-                :step-strictly="true"
-                style="width: 100%"
-                :disabled="isPredicting"
-                placeholder="请输入 0–123 的整数"
-              />
-              <div v-if="form.cell_id === null || form.cell_id === undefined" class="hint">请输入 0–123 的整数</div>
-            </el-form-item>
+          <el-form-item label="电池组编号">
+            <el-input-number
+              v-model="form.cell_id"
+              :min="0"
+              :max="123"
+              :precision="0"
+              :step="1"
+              :step-strictly="true"
+              style="width: 100%"
+              :disabled="isPredicting"
+              placeholder="请输入 0–123 的整数"
+            />
+            <div v-if="form.cell_id === null || form.cell_id === undefined" class="hint">请输入 0–123 的整数</div>
+          </el-form-item>
 
-            <el-form-item label="预测步长">
-              <el-input-number
-                v-model="form.step"
-                :min="1"
-                :max="100000"
-                :precision="0"
-                :step="1"
-                :step-strictly="true"
-                style="width: 100%"
-                :disabled="isPredicting"
-              />
-            </el-form-item>
+          <el-form-item label="预测步长">
+            <el-input-number
+              v-model="form.step"
+              :min="1"
+              :max="100000"
+              :precision="0"
+              :step="1"
+              :step-strictly="true"
+              style="width: 100%"
+              :disabled="isPredicting"
+            />
+          </el-form-item>
 
-            <el-form-item>
-              <el-button type="primary" :loading="starting" :disabled="isPredicting" @click="handleStartPredict">开始预测</el-button>
-              <el-button type="danger" :disabled="!isPredicting" @click="handleStopPredict">停止预测</el-button>
-              <el-button :disabled="loadingModels || isPredicting" @click="refreshModels">刷新模型列表</el-button>
-            </el-form-item>
-          </el-form>
+          <el-form-item>
+            <el-button type="primary" :loading="starting" :disabled="isPredicting" @click="handleStartPredict" style="width: 100%; margin-bottom: 10px;">开始预测</el-button>
+            <el-button type="danger" :disabled="!isPredicting" @click="handleStopPredict" style="width: 100%; margin-left: 0; margin-bottom: 10px;">停止预测</el-button>
+            <el-button :disabled="loadingModels || isPredicting" @click="refreshModels" style="width: 100%; margin-left: 0;">刷新模型列表</el-button>
+          </el-form-item>
+        </el-form>
 
-          <el-alert v-if="errorMsg" type="error" show-icon :closable="false" class="mt-3">
-            <template #title>预测失败</template>
-            <template #default>
-              <pre class="error-pre">{{ errorMsg }}</pre>
-            </template>
-          </el-alert>
-        </el-card>
+        <el-alert v-if="errorMsg" type="error" show-icon :closable="false" class="mt-3">
+          <template #title>预测失败</template>
+          <template #default>
+            <pre class="error-pre">{{ errorMsg }}</pre>
+          </template>
+        </el-alert>
 
-        <el-card header="预测信息">
-            <el-descriptions :column="1" border>
-              <el-descriptions-item label="状态">{{ isPredicting ? '预测中' : '空闲' }}</el-descriptions-item>
-            <el-descriptions-item label="模型">{{ displayModelFile || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="电池组">{{ String(form.cell_id ?? '-') }}</el-descriptions-item>
-            <el-descriptions-item label="步长">{{ String(form.step || '-') }}</el-descriptions-item>
-          </el-descriptions>
-        </el-card>
-      </el-col>
+        <el-divider content-position="center">预测信息</el-divider>
 
-      <el-col :span="14">
-        <el-card header="曲线对比（预测 vs 实际）" class="mb-4">
-          <el-empty v-if="cellsData.length === 0" description="开始预测后展示 PCL/RUL 曲线对比" />
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="状态">{{ isPredicting ? '预测中' : '空闲' }}</el-descriptions-item>
+          <el-descriptions-item label="模型">{{ displayModelFile || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="电池组">{{ String(form.cell_id ?? '-') }}</el-descriptions-item>
+          <el-descriptions-item label="步长">{{ String(form.step || '-') }}</el-descriptions-item>
+        </el-descriptions>
 
-          <el-tabs v-else v-model="activeCellTab" class="cell-tabs">
-            <el-tab-pane v-for="c in cellsData" :key="String(c.cell_id)" :label="`电池组 ${c.cell_id}`" :name="String(c.cell_id)">
-              <div class="chart-grid">
-                <div class="chart-item">
-                  <div class="chart-title">PCL（容量衰减）</div>
-                  <div :ref="(el) => setChartRef(c.cell_id, 'pcl', el)" class="chart-canvas"></div>
-                </div>
-                <div class="chart-item">
-                  <div class="chart-title">RUL（剩余寿命）</div>
-                  <div :ref="(el) => setChartRef(c.cell_id, 'rul', el)" class="chart-canvas"></div>
-                </div>
-              </div>
-            </el-tab-pane>
-          </el-tabs>
-        </el-card>
+        <el-divider content-position="center">导出结果</el-divider>
 
-        <el-card header="导出预测结果">
-          <div class="export-row">
-            <el-radio-group v-model="exportFormat" size="small">
-              <el-radio-button label="csv">CSV</el-radio-button>
-              <el-radio-button label="excel">Excel</el-radio-button>
+        <div class="export-section">
+          <div class="export-row" style="display: flex; flex-direction: column; gap: 10px;">
+            <el-radio-group v-model="exportFormat" size="small" style="width: 100%; display: flex;">
+              <el-radio-button label="csv" style="flex: 1">CSV</el-radio-button>
+              <el-radio-button label="excel" style="flex: 1">Excel</el-radio-button>
             </el-radio-group>
-            <el-button type="success" :disabled="!canExport" @click="handleExport">导出</el-button>
+            <el-button type="success" :disabled="!canExport" @click="handleExport" style="width: 100%;">导出</el-button>
           </div>
-          <div v-if="!canExport" class="hint">生成完毕后可导出当前预测结果</div>
-        </el-card>
-      </el-col>
-    </el-row>
+          <div v-if="!canExport" class="hint" style="text-align: center;">生成完毕后可导出</div>
+        </div>
+      </el-card>
+    </div>
+
+    <div class="main-content">
+      <el-card header="曲线对比（预测 vs 实际）" class="mb-4">
+        <el-empty v-if="cellsData.length === 0" description="开始预测后展示 PCL/RUL 曲线对比" />
+
+        <el-tabs v-else v-model="activeCellTab" class="cell-tabs">
+          <el-tab-pane v-for="c in cellsData" :key="String(c.cell_id)" :label="`电池组 ${c.cell_id}`" :name="String(c.cell_id)">
+            <div class="chart-grid">
+              <div class="chart-item">
+                <div class="chart-title">PCL（容量衰减）</div>
+                <div :ref="(el) => setChartRef(c.cell_id, 'pcl', el)" class="chart-canvas"></div>
+              </div>
+              <div class="chart-item">
+                <div class="chart-title">RUL（剩余寿命）</div>
+                <div :ref="(el) => setChartRef(c.cell_id, 'rul', el)" class="chart-canvas"></div>
+              </div>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </el-card>
+    </div>
   </div>
 </template>
 
@@ -412,6 +412,40 @@ refreshModels();
 </script>
 
 <style scoped>
+.test-platform {
+  position: relative;
+  min-height: 100vh;
+}
+
+.sidebar-container {
+  position: fixed;
+  top: 130px;
+  left: 0;
+  bottom: 0;
+  width: 400px;
+  background-color: #fff;
+  border-right: 1px solid #dcdfe6;
+  z-index: 900;
+  padding: 20px;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
+  overflow-y: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.sidebar-card {
+  border: none;
+  box-shadow: none !important;
+}
+
+.main-content {
+  margin-left: 300px;
+  padding: 20px;
+  min-height: 100vh;
+  background-color: #f5f7fa;
+}
+
 .mb-4 {
   margin-bottom: 16px;
 }
@@ -424,25 +458,28 @@ refreshModels();
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .hint {
   color: #909399;
   font-size: 12px;
-  margin-left: 10px;
-  line-height: 32px;
+  margin-left: 0;
+  line-height: 24px;
 }
 
 .chart-grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 16px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
 }
 
 .chart-item {
   border: 1px solid #ebeef5;
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: 6px;
+  padding: 6px;
   background: #fff;
 }
 
@@ -455,5 +492,9 @@ refreshModels();
 .chart-canvas {
   width: 100%;
   height: 320px;
+}
+
+.export-section {
+  padding: 0 5px;
 }
 </style>

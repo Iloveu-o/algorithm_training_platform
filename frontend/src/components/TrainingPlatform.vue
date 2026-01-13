@@ -1,138 +1,136 @@
 <template>
   <div class="training-platform">
-    <el-row :gutter="20">
-      <el-col :span="12">
-        <el-card header="算法训练" class="mb-4">
-          <el-form :model="form" label-width="110px">
-            <el-form-item label="模型类型">
-              <el-select v-model="form.model_type" placeholder="请选择" style="width: 100%">
-                <el-option label="Baseline" value="Baseline" />
-                <el-option label="BiLSTM" value="BiLSTM" />
-                <el-option label="DeepHPM" value="DeepHPM" />
-              </el-select>
-            </el-form-item>
+    <!-- 侧边导航栏：配置与控制 -->
+    <div class="sidebar-container">
+      <el-card class="sidebar-card" :body-style="{ padding: '15px', maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' }">
+        <el-form :model="form" label-width="100px" size="small">
+          <el-form-item label="模型类型">
+            <el-select v-model="form.model_type" placeholder="请选择" style="width: 100%">
+              <el-option label="Baseline" value="Baseline" />
+              <el-option label="BiLSTM" value="BiLSTM" />
+              <el-option label="DeepHPM" value="DeepHPM" />
+            </el-select>
+          </el-form-item>
 
-            <el-form-item label="Epochs">
-              <el-input-number
-                v-model="form.epochs"
-                :min="1"
-                :max="100000"
-                :step="1"
-                :precision="0"
-                :step-strictly="true"
-                style="width: 100%"
-              />
-            </el-form-item>
-
-            <el-form-item label="Batch Size">
-              <el-input-number
-                v-model="form.batch_size"
-                :min="1"
-                :max="100000"
-                :step="1"
-                :precision="0"
-                :step-strictly="true"
-                style="width: 100%"
-              />
-            </el-form-item>
-
-            <el-form-item label="学习率">
-              <el-input-number v-model="form.lr" :min="0.00000001" :step="0.0001" :precision="8" style="width: 100%" />
-            </el-form-item>
-
-            <el-form-item label="优化器">
-              <el-select v-model="form.optimizer" placeholder="请选择" style="width: 100%">
-                <el-option label="Adam" value="Adam" />
-                <el-option label="SGD" value="SGD" />
-              </el-select>
-            </el-form-item>
-
-            <el-form-item v-if="showStructure" label="Layers">
-              <el-input v-model="form.layers" placeholder="例如：32,32" />
-            </el-form-item>
-
-            <el-form-item v-if="showStructure" label="Activation">
-              <el-select v-model="form.activation" placeholder="请选择" style="width: 100%">
-                <el-option label="Tanh" value="Tanh" />
-                <el-option label="ReLU" value="ReLU" />
-                <el-option label="Sigmoid" value="Sigmoid" />
-                <el-option label="LeakyReLU" value="LeakyReLU" />
-                <el-option label="Sin" value="Sin" />
-              </el-select>
-            </el-form-item>
-
-            <el-alert
-              v-if="form.model_type === 'BiLSTM'"
-              type="info"
-              show-icon
-              :closable="false"
-              title="BiLSTM 结构参数由后端默认配置（当前前端仅传 7 个训练参数）。"
-              class="mb-3"
+          <el-form-item label="Epochs">
+            <el-input-number
+              v-model="form.epochs"
+              :min="1"
+              :max="100000"
+              :step="1"
+              :precision="0"
+              :step-strictly="true"
+              style="width: 100%"
             />
+          </el-form-item>
 
-            <el-form-item>
-              <el-button type="primary" :loading="submitting" :disabled="isTraining" @click="handleStartTraining">开始训练</el-button>
-              <el-button type="danger" :disabled="!isTraining" :loading="canceling" @click="handleCancelTraining">停止训练</el-button>
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-col>
+          <el-form-item label="Batch Size">
+            <el-input-number
+              v-model="form.batch_size"
+              :min="1"
+              :max="100000"
+              :step="1"
+              :precision="0"
+              :step-strictly="true"
+              style="width: 100%"
+            />
+          </el-form-item>
 
-      <el-col :span="12">
-        <el-card header="训练任务" class="mb-4">
-          <el-descriptions :column="1" border>
-            <el-descriptions-item label="Job ID">{{ job.job_id || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="状态">{{ job.status || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="进度">{{ progressText }}</el-descriptions-item>
-            <el-descriptions-item label="创建时间">{{ job.created_at || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="开始时间">{{ job.started_at || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="结束时间">{{ job.finished_at || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="保存路径">{{ job.save_path || '-' }}</el-descriptions-item>
-          </el-descriptions>
+          <el-form-item label="学习率">
+            <el-input-number v-model="form.lr" :min="0.00000001" :step="0.0001" :precision="8" style="width: 100%" />
+          </el-form-item>
 
-          <div class="mt-3" v-if="job.artifacts">
-            <el-space wrap>
-              <el-link v-if="job.artifacts.pth" :href="job.artifacts.pth" target="_blank" type="primary">
-                下载模型 (.pth)
-              </el-link>
-              <el-link v-if="job.artifacts.txt" :href="job.artifacts.txt" target="_blank" type="primary">
-                查看日志 (.txt)
-              </el-link>
-            </el-space>
-          </div>
+          <el-form-item label="优化器">
+            <el-select v-model="form.optimizer" placeholder="请选择" style="width: 100%">
+              <el-option label="Adam" value="Adam" />
+              <el-option label="SGD" value="SGD" />
+            </el-select>
+          </el-form-item>
 
-          <el-alert v-if="job.error" type="error" show-icon :closable="false" class="mt-3">
-            <template #title>训练失败</template>
-            <template #default>
-              <pre class="error-pre">{{ job.error }}</pre>
-            </template>
-          </el-alert>
-        </el-card>
+          <el-form-item v-if="showStructure" label="Layers">
+            <el-input v-model="form.layers" placeholder="例如：32,32" />
+          </el-form-item>
 
-        <el-card header="指标 (metrics)" v-if="job.metrics">
-          <el-table :data="metricsTable" stripe border style="width: 100%">
-            <el-table-column prop="name" label="指标" width="140" />
-            <el-table-column prop="value" label="数值" />
-          </el-table>
-        </el-card>
+          <el-form-item v-if="showStructure" label="Activation">
+            <el-select v-model="form.activation" placeholder="请选择" style="width: 100%">
+              <el-option label="Tanh" value="Tanh" />
+              <el-option label="ReLU" value="ReLU" />
+              <el-option label="Sigmoid" value="Sigmoid" />
+              <el-option label="LeakyReLU" value="LeakyReLU" />
+              <el-option label="Sin" value="Sin" />
+            </el-select>
+          </el-form-item>
 
-        <el-empty v-else description="提交训练后会显示任务信息与指标" />
-      </el-col>
-    </el-row>
+          <el-alert
+            v-if="form.model_type === 'BiLSTM'"
+            type="info"
+            show-icon
+            :closable="false"
+            title="BiLSTM 结构参数由后端默认配置"
+            class="mb-3"
+          />
 
-    <el-row v-if="hasHistory" class="charts-row">
-      <el-col :span="24">
-        <div class="charts-container">
-          <el-card header="训练曲线">
-            <div class="charts-grid">
-              <div v-for="d in chartDefs" :key="d.key" class="chart-item">
-                <div :ref="(el) => setChartRef(el, d.key)" class="chart-canvas"></div>
-              </div>
-            </div>
-          </el-card>
+          <el-form-item>
+            <el-button type="primary" :loading="submitting" :disabled="isTraining" @click="handleStartTraining" style="width: 100%; margin-bottom: 10px;">开始训练</el-button>
+            <el-button type="danger" :disabled="!isTraining" :loading="canceling" @click="handleCancelTraining" style="width: 100%; margin-left: 0;">停止训练</el-button>
+          </el-form-item>
+        </el-form>
+      </el-card>
+    </div>
+
+    <!-- 右侧主内容：状态与图表 -->
+    <div class="main-content">
+      <!-- 简化后的训练任务状态栏 -->
+      <el-card shadow="hover" class="mb-4 task-status-card" v-if="job.job_id">
+        <div class="status-header">
+          <span class="font-bold">任务 ID: {{ job.job_id }}</span>
+          <el-tag :type="statusTagType" effect="dark">{{ job.status }}</el-tag>
         </div>
-      </el-col>
-    </el-row>
+        
+        <div class="mt-3 progress-section">
+          <div class="progress-info">
+            <span>进度: {{ progressText }}</span>
+            <span v-if="job.finished_at">结束于: {{ job.finished_at }}</span>
+          </div>
+          <el-progress 
+            :percentage="progressPercentage" 
+            :status="progressStatus"
+            :stroke-width="18"
+            text-inside 
+          />
+        </div>
+
+        <div class="mt-3" v-if="job.artifacts">
+          <el-space wrap>
+            <el-link v-if="job.artifacts.pth" :href="job.artifacts.pth" target="_blank" type="primary" :underline="false">
+              <el-button type="primary" link icon="Download">下载模型 (.pth)</el-button>
+            </el-link>
+            <el-link v-if="job.artifacts.txt" :href="job.artifacts.txt" target="_blank" type="primary" :underline="false">
+              <el-button type="primary" link icon="Document">查看日志 (.txt)</el-button>
+            </el-link>
+          </el-space>
+        </div>
+
+        <el-alert v-if="job.error" type="error" show-icon :closable="false" class="mt-3">
+          <template #title>训练失败</template>
+          <template #default>
+            <pre class="error-pre">{{ job.error }}</pre>
+          </template>
+        </el-alert>
+      </el-card>
+
+      <el-empty v-else description="请在左侧配置参数并开始训练" />
+
+      <div v-if="hasHistory" class="charts-wrapper">
+        <el-card header="训练曲线" class="charts-card">
+          <div class="charts-grid">
+            <div v-for="d in chartDefs" :key="d.key" class="chart-item">
+              <div :ref="(el) => setChartRef(el, d.key)" class="chart-canvas"></div>
+            </div>
+          </div>
+        </el-card>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -188,18 +186,33 @@ watch(
   }
 );
 
-const metricsTable = computed(() => {
-  if (!job.metrics) return [];
-  return Object.entries(job.metrics).map(([k, v]) => ({
-    name: k,
-    value: typeof v === 'number' ? v.toFixed(6) : String(v),
-  }));
+const statusTagType = computed(() => {
+  switch (job.status) {
+    case 'running': return 'primary';
+    case 'succeeded': return 'success';
+    case 'failed': return 'danger';
+    case 'canceled': return 'info';
+    case 'queued': return 'warning';
+    default: return 'info';
+  }
+});
+
+const progressPercentage = computed(() => {
+  const p = job.progress;
+  if (!p || !p.epoch || !p.epochs) return 0;
+  return Math.min(100, Math.floor((p.epoch / p.epochs) * 100));
+});
+
+const progressStatus = computed(() => {
+  if (job.status === 'succeeded') return 'success';
+  if (job.status === 'failed' || job.status === 'canceled') return 'exception';
+  return '';
 });
 
 const progressText = computed(() => {
   const p = job.progress;
   if (!p || !p.epoch || !p.epochs) return '-';
-  return `${p.epoch} / ${p.epochs}`;
+  return `${p.epoch} / ${p.epochs} Epochs`;
 });
 
 const hasHistory = computed(() => {
@@ -436,7 +449,37 @@ onUnmounted(() => {
 
 <style scoped>
 .training-platform {
-  padding: 0 20px 20px;
+  position: relative;
+  min-height: 100vh;
+}
+
+.sidebar-container {
+  position: fixed;
+  top: 130px;
+  left: 0;
+  bottom: 0;
+  width: 250px;
+  background-color: #fff;
+  border-right: 1px solid #dcdfe6;
+  z-index: 900;
+  padding: 20px;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
+  overflow-y: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.sidebar-card {
+  border: none;
+  box-shadow: none !important;
+}
+
+.main-content {
+  margin-left: 300px;
+  padding: 20px;
+  min-height: 100vh;
+  background-color: #f5f7fa;
 }
 
 .mb-3 {
@@ -451,18 +494,13 @@ onUnmounted(() => {
   margin-top: 12px;
 }
 
-.charts-row {
+.charts-wrapper {
   margin-top: 16px;
-}
-
-.charts-container {
-  max-width: 1400px;
-  margin: 0 auto;
 }
 
 .charts-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
 }
 
@@ -485,5 +523,31 @@ onUnmounted(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.task-status-card .status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.task-status-card .progress-section {
+  margin-top: 16px;
+}
+
+.task-status-card .progress-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: #606266;
+}
+
+.font-bold {
+  font-weight: bold;
+}
+
+.charts-card :deep(.el-card__body) {
+  padding: 12px;
 }
 </style>

@@ -39,8 +39,8 @@ USER_CONFIG = {
     "settings_path": os.path.join(ROOT, "Settings", "settings_SoH_CaseA.pth"), # 默认设置文件路径
 
     # 2. 数据集划分
-    "train_cells": "91-100",  # 训练集电池编号 (DeepHPM建议更多数据，如 "91,124")
-    "test_cells": "124",      # 测试集电池编号
+    "train_cells": "1-100",  # 训练集电池编号 (DeepHPM建议更多数据，如 "91,124")
+    "test_cells": "101-124",      # 测试集电池编号
     "perc_val": 0.2,          # 验证集比例
 
     # 3. 通用网络结构参数 (Baseline & DeepHPM)
