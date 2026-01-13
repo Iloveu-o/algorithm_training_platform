@@ -1,0 +1,22 @@
+save_path: g:\学习\大四课设\电池\algorithm_training_platform\results\BiLSTM_20260113133804.pth
+started_at: 2026-01-13T13:38:04.977172+08:00
+finished_at: 2026-01-13T13:41:24.727276+08:00
+duration_seconds: 199.750
+
+model_type: BiLSTM
+train_cells: [91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+test_cells: [124]
+
+metrics:
+  MAE=0.003674  MSE=0.000016  RMSPE=0.004353  R2=0.990919
+
+metrics_json:
+{
+  "MAE": 0.003673784201964736,
+  "MSE": 1.5556526705040596e-05,
+  "RMSPE": 0.004353146068751812,
+  "R2": 0.990919291973114
+}
+
+config:
+TrainConfig(model_type='BiLSTM', data_path='g:\\学习\\大四课设\\电池\\algorithm_training_platform\\SeversonBattery.mat', save_path='g:\\学习\\大四课设\\电池\\algorithm_training_platform\\results\\BiLSTM_20260113133804.pth', train_cells=[91, 92, 93, 94, 95, 96, 97, 98, 99, 100], test_cells=[124], perc_val=0.2, layers=[32, 8], activation='Tanh', hidden_dim=32, num_layers=2, dropout=0.0, inputs_dynamical='U', inputs_dim_dynamical=1, epochs=1024, batch_size=512, lr=0.001, weight_decay=0.0, step_size=200, gamma=0.5, optimizer='Adam', device='cuda', seed=1234)

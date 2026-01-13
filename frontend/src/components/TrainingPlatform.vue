@@ -73,8 +73,6 @@
             <el-form-item>
               <el-button type="primary" :loading="submitting" :disabled="isTraining" @click="handleStartTraining">开始训练</el-button>
               <el-button type="danger" :disabled="!isTraining" :loading="canceling" @click="handleCancelTraining">停止训练</el-button>
-              <el-button :disabled="!job.job_id || polling" @click="handleRefreshJob">刷新状态</el-button>
-              <el-button :disabled="!polling" @click="stopPolling">停止轮询</el-button>
             </el-form-item>
           </el-form>
         </el-card>
@@ -388,15 +386,6 @@ const fetchJob = async () => {
   await updateCharts();
   if (data.status === 'succeeded' || data.status === 'failed' || data.status === 'canceled') {
     stopPolling();
-  }
-};
-
-const handleRefreshJob = async () => {
-  try {
-    await fetchJob();
-  } catch (e) {
-    const msg = e?.response?.data?.detail || e?.message || String(e);
-    ElMessage.error(`刷新失败：${msg}`);
   }
 };
 

@@ -2,15 +2,21 @@
   <div class="battery-stats">
     <el-card class="search-card">
       <div class="search-box">
-        <el-input 
-          v-model="batteryId" 
-          placeholder="请输入电池组编号 (例如: 1)" 
-          class="input-id" 
-          clearable
-          @keyup.enter="handleAnalyze"
-        >
-          <template #prepend>电池组编号</template>
-        </el-input>
+        <div class="input-wrap">
+          <div class="input-label">电池组编号</div>
+          <el-input-number
+            v-model="batteryId"
+            :min="0"
+            :max="123"
+            :precision="0"
+            :step="1"
+            :step-strictly="true"
+            class="input-id"
+            style="width: 30%"
+            placeholder="请输入 0–123 的整数"
+            @keyup.enter="handleAnalyze"
+          />
+        </div>
         <el-button type="primary" :loading="loading" @click="handleAnalyze">开始分析</el-button>
       </div>
     </el-card>
@@ -119,7 +125,7 @@ import { ElMessage } from 'element-plus';
 import { getBatteryAnalysis } from '../api/battery';
 import * as echarts from 'echarts';
 
-const batteryId = ref('');
+const batteryId = ref(null);
 const loading = ref(false);
 const result = ref(null);
 
@@ -435,7 +441,7 @@ onUnmounted(() => {
 });
 
 const handleAnalyze = async () => {
-  if (!batteryId.value) {
+  if (batteryId.value === null || batteryId.value === '') {
     ElMessage.warning('请输入电池组编号');
     return;
   }
@@ -443,6 +449,10 @@ const handleAnalyze = async () => {
   const id = parseInt(batteryId.value);
   if (isNaN(id)) {
     ElMessage.error('请输入有效的数字编号');
+    return;
+  }
+  if (id < 0 || id > 123) {
+    ElMessage.error('电池组编号必须在 0–123 范围内');
     return;
   }
 
@@ -477,12 +487,27 @@ const handleAnalyze = async () => {
 .search-box {
   display: flex;
   gap: 10px;
-  max-width: 500px;
+  max-width: 100%;
   margin: 0 auto;
+  align-items: center;
 }
 
 .input-id {
   flex: 1;
+}
+.input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+.input-label {
+  font-size: 12px;
+  color: #606266;
+}
+.hint {
+  color: #909399;
+  font-size: 12px;
 }
 
 .stat-item {

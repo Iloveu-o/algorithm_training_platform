@@ -4,34 +4,25 @@
       <el-col :span="10">
         <el-card header="算法测试平台" class="mb-4">
           <el-form :model="form" label-width="110px">
-            <el-form-item label="模型来源">
-              <el-radio-group v-model="form.model_source">
-                <el-radio label="server">从后端列表选择</el-radio>
-                <el-radio label="local">选择本地模型文件</el-radio>
-              </el-radio-group>
-            </el-form-item>
-
-            <el-form-item v-if="form.model_source === 'server'" label="模型文件">
-              <el-select v-model="form.model_file" placeholder="请选择模型" style="width: 100%">
-                <el-option v-for="m in models" :key="m.file" :label="m.file" :value="m.file" />
+            <el-form-item label="模型文件">
+              <el-select v-model="form.model_name" placeholder="请选择模型" style="width: 100%">
+                <el-option v-for="m in models" :key="m" :label="m" :value="m" />
               </el-select>
             </el-form-item>
 
-            <el-form-item v-else label="本地模型">
-              <el-upload
-                :auto-upload="false"
-                :show-file-list="false"
-                accept=".pth"
-                :disabled="isPredicting"
-                @change="handleLocalModelChange"
-              >
-                <el-button :disabled="isPredicting">选择 .pth 文件</el-button>
-              </el-upload>
-              <div class="hint">{{ localModelHint }}</div>
-            </el-form-item>
-
             <el-form-item label="电池组编号">
-              <el-input v-model="form.cells" placeholder="例如：100 或 91-95,100" :disabled="isPredicting" />
+              <el-input-number
+                v-model="form.cell_id"
+                :min="0"
+                :max="123"
+                :precision="0"
+                :step="1"
+                :step-strictly="true"
+                style="width: 100%"
+                :disabled="isPredicting"
+                placeholder="请输入 0–123 的整数"
+              />
+              <div v-if="form.cell_id === null || form.cell_id === undefined" class="hint">请输入 0–123 的整数</div>
             </el-form-item>
 
             <el-form-item label="预测步长">
@@ -63,10 +54,10 @@
         </el-card>
 
         <el-card header="预测信息">
-          <el-descriptions :column="1" border>
-            <el-descriptions-item label="状态">{{ isPredicting ? '预测中' : '空闲' }}</el-descriptions-item>
+            <el-descriptions :column="1" border>
+              <el-descriptions-item label="状态">{{ isPredicting ? '预测中' : '空闲' }}</el-descriptions-item>
             <el-descriptions-item label="模型">{{ displayModelFile || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="电池组">{{ displayCells || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="电池组">{{ String(form.cell_id ?? '-') }}</el-descriptions-item>
             <el-descriptions-item label="步长">{{ String(form.step || '-') }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -92,10 +83,15 @@
           </el-tabs>
         </el-card>
 
-        <el-card v-if="exportInfo.url" header="导出结果">
-          <el-space wrap>
-            <el-link :href="exportInfo.url" target="_blank" type="primary">下载最近导出文件</el-link>
-          </el-space>
+        <el-card header="导出预测结果">
+          <div class="export-row">
+            <el-radio-group v-model="exportFormat" size="small">
+              <el-radio-button label="csv">CSV</el-radio-button>
+              <el-radio-button label="excel">Excel</el-radio-button>
+            </el-radio-group>
+            <el-button type="success" :disabled="!canExport" @click="handleExport">导出</el-button>
+          </div>
+          <div v-if="!canExport" class="hint">生成完毕后可导出当前预测结果</div>
         </el-card>
       </el-col>
     </el-row>
@@ -109,10 +105,8 @@ import * as echarts from 'echarts';
 import { listPredictModels, runPredict } from '../api/battery';
 
 const form = reactive({
-  model_source: 'server',
-  model_file: '',
-  local_model_name: '',
-  cells: '100',
+  model_name: '',
+  cell_id: 100,
   step: 1,
 });
 
@@ -125,9 +119,8 @@ const models = ref([]);
 const cellsData = ref([]);
 const activeCellTab = ref('');
 
-const exportInfo = reactive({
-  url: '',
-});
+const exportFormat = ref('csv');
+const canExport = computed(() => !isPredicting.value && Array.isArray(cellsData.value) && cellsData.value.length > 0);
 
 let abortController = null;
 let animTimer = null;
@@ -137,22 +130,11 @@ let animMax = 0;
 const chartRefs = ref({});
 const chartInstances = new Map();
 
-const localModelHint = computed(() => {
-  const name = String(form.local_model_name || '').trim();
-  return name ? `已选择：${name}` : '仅使用文件名触发预测（后端需能找到同名 .pth）';
-});
-
 const displayModelFile = computed(() => {
-  if (form.model_source === 'server') return String(form.model_file || '').trim();
-  return String(form.local_model_name || '').trim();
+  return String(form.model_name || '').trim();
 });
 
-const displayCells = computed(() => String(form.cells || '').trim());
-
-const resolveModelFile = () => {
-  if (form.model_source === 'server') return String(form.model_file || '').trim();
-  return String(form.local_model_name || '').trim();
-};
+const resolveModelFile = () => String(form.model_name || '').trim();
 
 const setChartRef = (cellId, type, el) => {
   if (!el) return;
@@ -266,8 +248,8 @@ const refreshModels = async () => {
   try {
     const data = await listPredictModels();
     models.value = Array.isArray(data?.models) ? data.models : [];
-    if (!form.model_file && models.value.length > 0) {
-      form.model_file = models.value[0].file;
+    if (!form.model_name && models.value.length > 0) {
+      form.model_name = models.value[0];
     }
   } catch (e) {
     const msg = e?.response?.data?.detail || e?.message || String(e);
@@ -277,25 +259,19 @@ const refreshModels = async () => {
   }
 };
 
-const handleLocalModelChange = (file) => {
-  const name = String(file?.name || '').trim();
-  form.local_model_name = name;
-};
-
 const validatePayload = () => {
   const modelFile = resolveModelFile();
   if (!modelFile) throw new Error('请选择模型文件');
-  const cells = String(form.cells || '').trim();
-  if (!cells) throw new Error('请输入电池组编号');
+  const cellId = Number(form.cell_id);
+  if (!Number.isInteger(cellId) || cellId < 0 || cellId > 123) throw new Error('电池组编号必须为 0–123 的整数');
   const step = Number(form.step);
   if (!Number.isInteger(step) || step <= 0) throw new Error('预测步长必须为正整数');
-  return { modelFile, cells, step };
+  return { modelFile, cellId, step };
 };
 
 const handleStartPredict = async () => {
   starting.value = true;
   errorMsg.value = '';
-  exportInfo.url = '';
   stopAnimation();
   if (abortController) {
     abortController.abort();
@@ -310,8 +286,8 @@ const handleStartPredict = async () => {
 
     abortController = new AbortController();
     const payload = {
-      model_file: v.modelFile,
-      cells: v.cells,
+      model_name: v.modelFile,
+      cell_ids: [v.cellId],
       step: v.step,
     };
     const data = await runPredict(payload, { signal: abortController.signal });
@@ -341,6 +317,85 @@ const handleStopPredict = () => {
   }
   isPredicting.value = false;
   ElMessage.info('已停止预测');
+};
+
+const sanitizeName = (s) => String(s || '').replace(/[\\/:*?"<>|]/g, '_').trim();
+const buildFilename = () => {
+  const cell = Number(form.cell_id);
+  const model = sanitizeName(String(form.model_name || 'model'));
+  return `prediction_battery${cell}_${model}`;
+};
+
+const buildCsvContent = (cell) => {
+  const cycles = Array.isArray(cell.cycles) ? cell.cycles : [];
+  const pclTrue = Array.isArray(cell.pcl_true) ? cell.pcl_true : [];
+  const pclPred = Array.isArray(cell.pcl_pred) ? cell.pcl_pred : [];
+  const rulTrue = Array.isArray(cell.rul_true) ? cell.rul_true : [];
+  const rulPred = Array.isArray(cell.rul_pred) ? cell.rul_pred : [];
+  const n = Math.max(cycles.length, pclTrue.length, pclPred.length, rulTrue.length, rulPred.length);
+  const lines = ['cycle,pcl_true,pcl_pred,rul_true,rul_pred'];
+  for (let i = 0; i < n; i++) {
+    const row = [
+      cycles[i] ?? '',
+      pclTrue[i] ?? '',
+      pclPred[i] ?? '',
+      rulTrue[i] ?? '',
+      rulPred[i] ?? '',
+    ];
+    lines.push(row.join(','));
+  }
+  return lines.join('\n');
+};
+
+const buildExcelHtml = (cell) => {
+  const cycles = Array.isArray(cell.cycles) ? cell.cycles : [];
+  const pclTrue = Array.isArray(cell.pcl_true) ? cell.pcl_true : [];
+  const pclPred = Array.isArray(cell.pcl_pred) ? cell.pcl_pred : [];
+  const rulTrue = Array.isArray(cell.rul_true) ? cell.rul_true : [];
+  const rulPred = Array.isArray(cell.rul_pred) ? cell.rul_pred : [];
+  const n = Math.max(cycles.length, pclTrue.length, pclPred.length, rulTrue.length, rulPred.length);
+  const header = '<tr><th>cycle</th><th>pcl_true</th><th>pcl_pred</th><th>rul_true</th><th>rul_pred</th></tr>';
+  let rows = '';
+  for (let i = 0; i < n; i++) {
+    rows += `<tr><td>${cycles[i] ?? ''}</td><td>${pclTrue[i] ?? ''}</td><td>${pclPred[i] ?? ''}</td><td>${rulTrue[i] ?? ''}</td><td>${rulPred[i] ?? ''}</td></tr>`;
+  }
+  const table = `<table>${header}${rows}</table>`;
+  const html = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head><meta charset="UTF-8"></head><body>${table}</body></html>`;
+  return html;
+};
+
+const triggerDownload = (blob, filename) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+const handleExport = () => {
+  if (!canExport.value) {
+    ElMessage.info('预测尚未完成，无法导出');
+    return;
+  }
+  const cell = cellsData.value[0];
+  const base = buildFilename();
+  if (exportFormat.value === 'csv') {
+    const content = buildCsvContent(cell);
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
+    triggerDownload(blob, `${base}.csv`);
+    ElMessage.success('已导出 CSV');
+    return;
+  }
+  // excel
+  const html = buildExcelHtml(cell);
+  const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  triggerDownload(blob, `${base}.xls`);
+  ElMessage.success('已导出 Excel');
 };
 
 onUnmounted(() => {

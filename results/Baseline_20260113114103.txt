@@ -1,0 +1,22 @@
+save_path: g:\学习\大四课设\电池\algorithm_training_platform\results\Baseline_20260113114103.pth
+started_at: 2026-01-13T11:41:03.768422+08:00
+finished_at: 2026-01-13T11:43:33.780866+08:00
+duration_seconds: 150.012
+
+model_type: Baseline
+train_cells: [91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+test_cells: [124]
+
+metrics:
+  MAE=0.003138  MSE=0.000015  RMSPE=0.004347  R2=0.991143
+
+metrics_json:
+{
+  "MAE": 0.0031375016551464796,
+  "MSE": 1.5172503481153399e-05,
+  "RMSPE": 0.004347438458353281,
+  "R2": 0.9911434650421143
+}
+
+config:
+TrainConfig(model_type='Baseline', data_path='g:\\学习\\大四课设\\电池\\algorithm_training_platform\\SeversonBattery.mat', save_path='g:\\学习\\大四课设\\电池\\algorithm_training_platform\\results\\Baseline_20260113114103.pth', train_cells=[91, 92, 93, 94, 95, 96, 97, 98, 99, 100], test_cells=[124], perc_val=0.2, layers=[32, 32], activation='Tanh', hidden_dim=32, num_layers=2, dropout=0.0, inputs_dynamical='U', inputs_dim_dynamical=1, epochs=512, batch_size=256, lr=0.001, weight_decay=0.0, step_size=200, gamma=0.5, optimizer='Adam', device='cuda', seed=1234)
