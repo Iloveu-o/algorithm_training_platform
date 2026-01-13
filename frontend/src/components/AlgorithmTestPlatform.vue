@@ -1,8 +1,12 @@
 <template>
   <div class="test-platform">
     <div class="sidebar-container">
-      <el-card class="sidebar-card" :body-style="{ padding: '15px', maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' }">
-        <el-form :model="form" label-width="110px">
+      <div class="sidebar-header">
+        <span>算法测试控制台</span>
+      </div>
+      <el-card class="sidebar-card" :body-style="{ padding: '15px', maxHeight: 'calc(100vh - 220px)', overflowY: 'auto' }">
+        <el-form :model="form" label-width="100px" size="default">
+          <div class="section-title">参数配置</div>
           <el-form-item label="模型文件">
             <el-select v-model="form.model_name" placeholder="请选择模型" style="width: 100%">
               <el-option v-for="m in models" :key="m" :label="m" :value="m" />
@@ -19,9 +23,8 @@
               :step-strictly="true"
               style="width: 100%"
               :disabled="isPredicting"
-              placeholder="请输入 0–123 的整数"
+              placeholder="0–123"
             />
-            <div v-if="form.cell_id === null || form.cell_id === undefined" class="hint">请输入 0–123 的整数</div>
           </el-form-item>
 
           <el-form-item label="预测步长">
@@ -37,11 +40,11 @@
             />
           </el-form-item>
 
-          <el-form-item>
-            <el-button type="primary" :loading="starting" :disabled="isPredicting" @click="handleStartPredict" style="width: 100%; margin-bottom: 10px;">开始预测</el-button>
-            <el-button type="danger" :disabled="!isPredicting" @click="handleStopPredict" style="width: 100%; margin-left: 0; margin-bottom: 10px;">停止预测</el-button>
-            <el-button :disabled="loadingModels || isPredicting" @click="refreshModels" style="width: 100%; margin-left: 0;">刷新模型列表</el-button>
-          </el-form-item>
+          <div class="action-buttons">
+            <el-button type="primary" :loading="starting" :disabled="isPredicting" @click="handleStartPredict" icon="VideoPlay" class="w-full">开始预测</el-button>
+            <el-button type="danger" :disabled="!isPredicting" @click="handleStopPredict" icon="VideoPause" class="w-full">停止预测</el-button>
+            <el-button :disabled="loadingModels || isPredicting" @click="refreshModels" icon="Refresh" class="w-full">刷新模型列表</el-button>
+          </div>
         </el-form>
 
         <el-alert v-if="errorMsg" type="error" show-icon :closable="false" class="mt-3">
@@ -51,26 +54,36 @@
           </template>
         </el-alert>
 
-        <el-divider content-position="center">预测信息</el-divider>
+        <el-divider content-position="left">预测状态</el-divider>
 
-        <el-descriptions :column="1" border size="small">
-          <el-descriptions-item label="状态">{{ isPredicting ? '预测中' : '空闲' }}</el-descriptions-item>
-          <el-descriptions-item label="模型">{{ displayModelFile || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="电池组">{{ String(form.cell_id ?? '-') }}</el-descriptions-item>
-          <el-descriptions-item label="步长">{{ String(form.step || '-') }}</el-descriptions-item>
-        </el-descriptions>
+        <div class="info-box">
+          <div class="info-row">
+            <span class="label">当前状态:</span>
+            <el-tag :type="isPredicting ? 'success' : 'info'" size="small">{{ isPredicting ? '预测中' : '空闲' }}</el-tag>
+          </div>
+          <div class="info-row">
+            <span class="label">模型:</span>
+            <span class="value" :title="displayModelFile">{{ displayModelFile || '-' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">电池组:</span>
+            <span class="value">{{ String(form.cell_id ?? '-') }}</span>
+          </div>
+          <div class="info-row">
+            <span class="label">步长:</span>
+            <span class="value">{{ String(form.step || '-') }}</span>
+          </div>
+        </div>
 
-        <el-divider content-position="center">导出结果</el-divider>
+        <el-divider content-position="left">结果导出</el-divider>
 
         <div class="export-section">
-          <div class="export-row" style="display: flex; flex-direction: column; gap: 10px;">
-            <el-radio-group v-model="exportFormat" size="small" style="width: 100%; display: flex;">
-              <el-radio-button label="csv" style="flex: 1">CSV</el-radio-button>
-              <el-radio-button label="excel" style="flex: 1">Excel</el-radio-button>
-            </el-radio-group>
-            <el-button type="success" :disabled="!canExport" @click="handleExport" style="width: 100%;">导出</el-button>
-          </div>
-          <div v-if="!canExport" class="hint" style="text-align: center;">生成完毕后可导出</div>
+          <el-radio-group v-model="exportFormat" size="small" class="w-full flex mb-2">
+            <el-radio-button label="csv" class="flex-1">CSV</el-radio-button>
+            <el-radio-button label="excel" class="flex-1">Excel</el-radio-button>
+          </el-radio-group>
+          <el-button type="success" :disabled="!canExport" @click="handleExport" icon="Download" class="w-full">导出结果</el-button>
+          <div v-if="!canExport" class="hint text-center mt-2">预测完成后可导出数据</div>
         </div>
       </el-card>
     </div>
@@ -422,43 +435,91 @@ refreshModels();
   top: 130px;
   left: 0;
   bottom: 0;
-  width: 400px;
+  width: 320px;
   background-color: #fff;
-  border-right: 1px solid #dcdfe6;
+  border-right: 1px solid #e4e7ed;
   z-index: 900;
   padding: 20px;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
-  overflow-y: hidden;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.05);
   display: flex;
   flex-direction: column;
-  justify-content: center;
+}
+
+.sidebar-header {
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+  padding: 0 10px 20px;
+  border-bottom: 1px solid #ebeef5;
+  margin-bottom: 15px;
+  display: flex;
+  align-items: center;
 }
 
 .sidebar-card {
   border: none;
   box-shadow: none !important;
+  flex: 1;
 }
 
 .main-content {
-  margin-left: 300px;
+  margin-left: 340px;
   padding: 20px;
   min-height: 100vh;
   background-color: #f5f7fa;
 }
 
+.section-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #909399;
+  margin: 10px 0 15px;
+  padding-left: 5px;
+  border-left: 3px solid #409eff;
+  line-height: 1;
+}
+
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.action-buttons .el-button {
+  margin-left: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.w-full {
+  width: 100%;
+}
+.flex {
+  display: flex;
+}
+.flex-1 {
+  flex: 1;
+}
+.mb-2 {
+  margin-bottom: 8px;
+}
 .mb-4 {
   margin-bottom: 16px;
 }
-
+.mt-2 {
+  margin-top: 8px;
+}
 .mt-3 {
   margin-top: 12px;
+}
+.text-center {
+  text-align: center;
 }
 
 .error-pre {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-family: monospace;
   font-size: 12px;
   line-height: 1.4;
 }
@@ -466,27 +527,63 @@ refreshModels();
 .hint {
   color: #909399;
   font-size: 12px;
-  margin-left: 0;
-  line-height: 24px;
+  line-height: 1.5;
+}
+
+.info-box {
+  background: #f8f9fa;
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.info-row:last-child {
+  margin-bottom: 0;
+}
+.info-row .label {
+  color: #606266;
+}
+.info-row .value {
+  color: #303133;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
 }
 
 .chart-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+  gap: 16px;
 }
 
 .chart-item {
   border: 1px solid #ebeef5;
-  border-radius: 6px;
-  padding: 6px;
+  border-radius: 8px;
+  padding: 16px;
   background: #fff;
+  transition: all 0.3s ease;
+}
+.chart-item:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
 }
 
 .chart-title {
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 500;
   color: #303133;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+  border-left: 4px solid #409eff;
+  padding-left: 8px;
 }
 
 .chart-canvas {
